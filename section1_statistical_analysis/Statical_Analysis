@@ -1,0 +1,264 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os  # <--- 1. IMPORT OS TO HANDLE FOLDERS
+
+# Making sure to round the values to 2 decimal places
+pd.set_option("display.float_format", "{:.2f}".format)
+
+# --- CONFIGURATION ---
+# 2. DEFINE YOUR OUTPUT FOLDER
+output_folder = 'Sections/section1/Outputs' 
+
+# 3. CREATE THE FOLDER IF IT DOESN'T EXIST
+os.makedirs(output_folder, exist_ok=True)
+print(f"Output files will be saved to: {output_folder}/")
+# ---------------------
+
+# Expose key variables and functions for import
+__all__ = [
+    "ratings", "user_statistics", "item_statistics",
+    "U1", "U2", "U3", "I1", "I2",
+    "user_items", "item_users",
+    "count_common_users_simple",
+    "count_common_items_simple",
+    "compute_beta_simple"
+]
+
+if __name__ == "__main__":
+    # 1. Load data
+    # Note: Assuming your input data is still in 'Data/ratings.csv' relative to where you run the script
+    ratings = pd.read_csv('Data/ratings.csv',
+                          usecols=['userId', 'movieId', 'rating', 'timestamp'])
+    ratings.columns = ['UserID', 'MovieID', 'Rating', 'Timestamp'] 
+
+    # 2. Checking rating distribution
+    print("Rating distribution:")
+    print(ratings['Rating'].value_counts().sort_index())
+    
+    # Checking the min and max rating
+    print("\nRating range:")
+    print(f"Min: {ratings['Rating'].min()}")
+    print(f"Max: {ratings['Rating'].max()}")
+    
+    # Adjusting the interval range 
+    ratings['Rating'] = (ratings['Rating'] + 0.5).astype(int)
+
+    # 3. Calculate user rating count (Nu)
+    user_rating_counts = ratings.groupby('UserID').size().reset_index(name='nu')
+
+    # 4. Calculate item rating count (Ni)
+    item_rating_counts = ratings.groupby('MovieID').size().reset_index(name='ni')
+
+    # 5. Calculate ru (average rating per user)
+    user_avg_ratings = ratings.groupby('UserID')['Rating'].mean().reset_index(name='ru')
+
+    # 6. Calculate ri (average rating per item)
+    item_avg_ratings = ratings.groupby('MovieID')['Rating'].mean().reset_index(name='ri')
+
+    # Combine and save user statistics
+    user_statistics = user_rating_counts.merge(user_avg_ratings, on='UserID')
+    print(user_statistics.head(10))
+    
+    # --- UPDATED SAVE PATH ---
+    save_path = os.path.join(output_folder, 'user_statistics.csv')
+    user_statistics.to_csv(save_path, index=False)
+    print(f"\nSaved to '{save_path}'")
+
+    # Combine and save item statistics
+    item_statistics = item_rating_counts.merge(item_avg_ratings, on='MovieID')
+    print(item_statistics.head(10))
+    
+    # --- UPDATED SAVE PATH ---
+    save_path = os.path.join(output_folder, 'item_statistics.csv')
+    item_statistics.to_csv(save_path, index=False)
+    print(f"\nSaved to '{save_path}'")
+
+    # 7. Sort items by number of ratings
+    item_statistics_sorted = item_statistics.sort_values('ni', ascending=True)
+    print(item_statistics_sorted.head(10))
+
+    # Create figure with 2 subplots
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    
+    # Long-tail Distribution plot 
+    axes[0].plot(range(len(item_statistics_sorted)), item_statistics_sorted['ni'].values, linewidth=2)
+    axes[0].set_xlabel('Item Index (sorted by rating count)', fontsize=12)
+    axes[0].set_ylabel('Number of Ratings', fontsize=12)
+    axes[0].set_title('Number of Ratings per Item (Ascending Order)', fontsize=14, fontweight='bold')
+    axes[0].grid(True, alpha=0.3)
+    
+    # Cumulative distribution (CDF)
+    sorted_counts = np.sort(item_statistics['ni'].values)
+    cumulative = np.arange(1, len(sorted_counts) + 1) / len(sorted_counts) * 100
+    axes[1].plot(sorted_counts, cumulative, linewidth=2, color='darkgreen')
+    axes[1].set_xlabel('Number of Ratings per Item', fontsize=12)
+    axes[1].set_ylabel('Cumulative Percentage (%)', fontsize=12)
+    axes[1].set_title('Cumulative Distribution of Ratings per Item', fontsize=14, fontweight='bold')
+    axes[1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # --- UPDATED SAVE PATH ---
+    save_path = os.path.join(output_folder, 'item_rating_distribution.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"Figure saved to {save_path}")
+    plt.show()
+    
+    # 8. Compute number of products based on average ratings
+    print(f"Min ri: {item_statistics['ri'].min():.2f}")
+    print(f"Max ri: {item_statistics['ri'].max():.2f}")
+    print(f"Mean ri: {item_statistics['ri'].mean():.2f}")
+    print(f"Median ri: {item_statistics['ri'].median():.2f}")
+
+    # Define the full label set (FIXED SYMBOL HERE: <= instead of ≤)
+    labels = [
+        'G1: <=1%', 'G2: 1%-5%', 'G3: 5%-10%', 'G4: 10%-20%', 'G5: 20%-30%',
+        'G6: 30%-40%', 'G7: 40%-50%', 'G8: 50%-60%', 'G9: 60%-70%', 'G10: 70%-100%'
+    ]
+
+    # Use qcut with 10 bins
+    try:
+        item_statistics['rating_group'] = pd.qcut(
+            item_statistics['ri'],
+            q=10, 
+            labels=labels,
+            duplicates='drop'
+        )
+    except ValueError:
+        num_bins = 9
+        labels_adjusted = labels[:num_bins]
+        item_statistics['rating_group'] = pd.qcut(
+            item_statistics['ri'],
+            q=num_bins,
+            labels=labels_adjusted,
+            duplicates='drop'
+        )
+        labels = labels_adjusted
+        print(f"\nNote: Only {num_bins} bins created due to duplicate rating values")
+
+    # Convert to ordered categorical
+    item_statistics['rating_group'] = pd.Categorical(
+        item_statistics['rating_group'],
+        categories=labels,
+        ordered=True
+    )
+
+    # 9. Count products in each group
+    group_counts = item_statistics['rating_group'].value_counts().sort_index()
+    print("\nNumber of Products by Average Rating Groups:")
+    for group in labels:
+        count = group_counts.get(group, 0)
+        percentage = (count / len(item_statistics)) * 100
+        print(f"{group}: {count} products ({percentage:.1f}%)")
+    print(f"\nTotal products: {len(item_statistics)}")
+
+    item_statistics_with_groups = item_statistics.copy()
+    
+    # --- UPDATED SAVE PATH ---
+    save_path = os.path.join(output_folder, 'item_statistics_with_groups.csv')
+    item_statistics_with_groups.to_csv(save_path, index=False)
+    print(f"\nSaved to '{save_path}'")
+
+    # 10. Plot distributions
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Before ordering
+    group_counts_original = item_statistics['rating_group'].astype(str).value_counts()
+    axes[0].bar(range(len(group_counts_original)), group_counts_original.values,
+                color='coral', edgecolor='black', alpha=0.7)
+    axes[0].set_xlabel('Rating Groups', fontsize=12)
+    axes[0].set_ylabel('Number of Products', fontsize=12)
+    axes[0].set_title('Distribution Before Ordering', fontsize=14, fontweight='bold')
+    axes[0].set_xticks(range(len(group_counts_original)))
+    axes[0].set_xticklabels(group_counts_original.index, rotation=45, ha='right')
+    axes[0].grid(True, alpha=0.3, axis='y')
+    for i, v in enumerate(group_counts_original.values):
+        axes[0].text(i, v + max(group_counts_original.values) * 0.01, str(v),
+                     ha='center', va='bottom', fontsize=10)
+
+    # After ordering
+    group_counts_sorted = item_statistics['rating_group'].value_counts().sort_index()
+    
+    axes[1].bar(range(len(group_counts_sorted)), group_counts_sorted.values,
+                color='steelblue', edgecolor='black', alpha=0.7)
+    axes[1].set_xlabel('Rating Groups', fontsize=12)
+    axes[1].set_ylabel('Number of Products', fontsize=12)
+    axes[1].set_title(f'Distribution After Ordering (G1→G{len(labels)})', fontsize=14, fontweight='bold')
+    axes[1].set_xticks(range(len(group_counts_sorted)))
+    axes[1].set_xticklabels(group_counts_sorted.index, rotation=45, ha='right')
+    axes[1].grid(True, alpha=0.3, axis='y')
+    for i, v in enumerate(group_counts_sorted.values):
+        axes[1].text(i, v + max(group_counts_sorted.values) * 0.01, str(v),
+                     ha='center', va='bottom', fontsize=10)
+
+    plt.tight_layout()
+    
+    # --- UPDATED SAVE PATH ---
+    save_path = os.path.join(output_folder, 'rating_groups_before_after_ordering.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"Figure saved to {save_path}")
+    plt.show()
+    
+    # 11. Select three target users
+    percentile_2 = np.percentile(user_statistics['nu'], 2)
+    percentile_5 = np.percentile(user_statistics['nu'], 5)
+    percentile_10 = np.percentile(user_statistics['nu'], 10)
+    U1 = user_statistics[user_statistics['nu'] <= percentile_2].iloc[0]
+    U2 = user_statistics[(user_statistics['nu'] > percentile_2) & 
+                             (user_statistics['nu'] <= percentile_5)].iloc[0]
+    U3 = user_statistics[(user_statistics['nu'] > percentile_5) & 
+                             (user_statistics['nu'] <= percentile_10)].iloc[0]
+    print(f"U1 (2%):  UserID={U1['UserID']}, nu={U1['nu']}, ru={U1['ru']:.2f}")
+    print(f"U2 (2-5%): UserID={U2['UserID']}, nu={U2['nu']}, ru={U2['ru']:.2f}")
+    print(f"U3 (5-10%): UserID={U3['UserID']}, nu={U3['nu']}, ru={U3['ru']:.2f}")
+
+    # 12. Select two lowest-rated items
+    lowest_rated_items = item_statistics.sort_values('ri', ascending=True)
+    I1 = lowest_rated_items.iloc[0]
+    I2 = lowest_rated_items.iloc[1]
+    print("Selected Target Items:")
+    print(f"I1: MovieID={I1['MovieID']}, ri={I1['ri']:.2f}, ni={I1['ni']}")
+    print(f"I2: MovieID={I2['MovieID']}, ri={I2['ri']:.2f}, ni={I2['ni']}")
+
+    # 13. Count co-rated users and items
+    user_items = ratings.groupby('UserID')['MovieID'].apply(set).to_dict()
+    item_users = ratings.groupby('MovieID')['UserID'].apply(set).to_dict()
+    
+    def count_common_users_simple(target_user):
+        target_items = user_items[target_user]
+        co_users_set = set()
+        for item in target_items:
+            co_users_set |= item_users[item]
+        co_users_set.discard(target_user)
+        return len(co_users_set)
+
+    def count_common_items_simple(target_item):
+        users_rated = item_users[target_item]
+        co_items_set = set()
+        for user in users_rated:
+            co_items_set |= user_items[user]
+        co_items_set.discard(target_item)
+        return len(co_items_set)
+
+    print("Co-rating users:")
+    for U in [U1, U2, U3]:
+        print(U["UserID"], count_common_users_simple(U["UserID"]))
+
+    print("\nCo-rated items:")
+    for I in [I1, I2]:
+        print(I["MovieID"], count_common_items_simple(I["MovieID"]))
+
+    def compute_beta_simple(target_user, percent=0.30):
+        target_items = user_items[target_user]
+        threshold = len(target_items) * percent
+        beta = 0
+        for other_user, other_items in user_items.items():
+            if other_user == target_user:
+                continue
+            if len(target_items & other_items) >= threshold:
+                beta += 1
+        return beta
+
+    for U in [U1, U2, U3]:
+        print(f"Beta for user {U['UserID']} = {compute_beta_simple(U['UserID'])}")
